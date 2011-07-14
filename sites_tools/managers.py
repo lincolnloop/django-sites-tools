@@ -2,6 +2,7 @@ from django.conf import settings
 from django.db import models
 from django.db.models.fields import FieldDoesNotExist
 
+
 class SiteAwareManager(models.Manager):
     """
     Use this to limit objects to those associated with a site.
@@ -14,54 +15,43 @@ class SiteAwareManager(models.Manager):
         on_site = SiteAwareManager("release__package__site", select_related=False)
 
     """
-    def __init__(self, field_name=None, select_related=True):
-        super(SiteAwareManager, self).__init__()
+    def __init__(self, field_name=None, select_related=False, *args, **kwargs):
         self.__field_name = field_name
         self.__select_related = select_related
-        self.__is_validated = False
+        super(SiteAwareManager, self).__init__(*args, **kwargs)
 
-    def _validate_field_name(self):
-        field_names = self.model._meta.get_all_field_names()
+    @property
+    def site_field_name(self):
+        if self.__field_name:
+            return self.__field_name
+        potential_names = ('site', 'sites')
+        for potential_name in potential_names:
+            try:
+                field = self.model._meta.get_field(potential_name)
+                if isinstance(field, (models.ForeignKey,
+                                      models.ManyToManyField)):
+                    self.__field_name = potential_name
+                    return potential_name
+            except FieldDoesNotExist:
+                pass
+        raise ValueError("%s couldn't find a related field named %s in %s." %
+                (self.__class__.__name__, ' or '.join(potential_names),
+                 self.model._meta.object_name))
 
-        # If a custom name is provided, make sure the field exists on the model
-        if self.__field_name is not None:
-            field_name = self.__field_name.split("__", 1)[0]
-            if field_name not in field_names:
-                raise ValueError("%s couldn't find a field named %s in %s." % (
-                    self.__class__.__name__, field_name, self.model._meta.object_name))
+    def get_query_set(self):
+        return super(SiteAwareManager, self).get_query_set()
 
-        # Otherwise, see if there is a field called either 'site' or 'sites'
-        else:
-            for potential_name in ['site', 'sites']:
-                if potential_name in field_names:
-                    self.__field_name = field_name = potential_name
-                    self.__is_validated = True
-                    break
-
-        # Now do a type check on the field (FK or M2M only)
-        try:
-            field = self.model._meta.get_field(field_name)
-            if not isinstance(field, (models.ForeignKey, models.ManyToManyField)):
-                raise TypeError(
-                    "%s must be a ForeignKey or ManyToManyField." % field_name)
-        except FieldDoesNotExist:
-            raise ValueError(
-                "%s couldn't find a field named %s in %s." % (
-                    self.__class__.__name__, field_name, self.model._meta.object_name))
-        self.__is_validated = True
-
-    def get_query_set(self, site_id=None):
+    def by_id(self, site_id=None):
         if site_id is None:
             site_id = settings.SITE_ID
-        if not self.__is_validated:
-            self._validate_field_name()
-        qs = super(SiteAwareManager, self).get_query_set()
+        qs = self.filter(**{self.site_field_name + '__id__exact': site_id})
         if self.__select_related:
             qs = qs.select_related(depth=1)
-        return qs.filter(**{self.__field_name + '__id__exact': site_id})
-    by_id = get_query_set
+        return qs
 
     def by_request(self, request):
-        if not hasattr(request, "site") or request.site is None:
+        # Using an equality check here because Django 1.3 doesn't do a good
+        # enough job of SimpleLazyObject to do a basic boolean check.
+        if getattr(request, 'site', None) == None:
             return self.none()
-        return self.by_id(request.site.id)
+        return self.by_id(request.site.pk)
