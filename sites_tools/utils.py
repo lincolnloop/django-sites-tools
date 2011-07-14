@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.sites.models import Site, SITE_CACHE
 
 from sites_tools import models
@@ -11,7 +12,13 @@ def get_site(request):
     ``RequestSite`` will be returned, otherwise the first ``Site`` matching the
     current host name will be returned.
 
-    If no matching ``Site`` object is found, ``None`` is returned.
+    If no matching ``Site`` object is found, the default behaviour is to return
+    ``None``. This can be altered via the ``SITES_FALLBACK`` Django setting:
+    
+    * Set to ``'default'`` to return the default site as defined by
+      ``SITE_ID``, or
+
+    * set to ``'request'`` to return a case insensitive ``RequestSite``.
     """
     host = request.get_host().lower()
     # Try to retrieve the site object from cache.
@@ -31,7 +38,11 @@ def get_site(request):
                     try:
                         site = matches[0]
                     except IndexError:
-                        pass
+                        fallback = getattr(settings, 'SITES_FALLBACK', None)
+                        if fallback == 'default':
+                            site = Site.objects.get_current()
+                        elif fallback == 'request':
+                            site = models.CaseInsensitiveRequestSite(request)
         else:
             site = models.CaseInsensitiveRequestSite(request)
         # Save the site object in the cache for faster lookup next time.
