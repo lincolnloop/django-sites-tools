@@ -1,20 +1,26 @@
 from django.conf import settings
 from django.utils.cache import patch_vary_headers
-from django.utils.functional import SimpleLazyObject
 
 from sites_tools import utils
 
 
-def get_site(request, obj_type=None):
-    if not hasattr(request, '_cached_site'):
-        request._cached_site = utils.get_site(request)
-    return request._cached_site
+class LazySite(object):
+    """
+    A lazy site object that refers to either Site instance or
+    a case insensitive RequestSite.
+    """
+
+    def __get__(self, request, obj_type=None):
+        if not hasattr(request, '_cached_site'):
+            request._cached_site = utils.get_site(request)
+        return request._cached_site
 
 
 class SitesMiddleware(object):
 
     def process_request(self, request):
-        request.site = SimpleLazyObject(lambda: get_site(request))
+        if not hasattr(request.__class__, 'site'):
+            request.__class__.site = LazySite()
 
     def process_response(self, request, response):
         """
